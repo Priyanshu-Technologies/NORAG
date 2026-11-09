@@ -1,0 +1,236 @@
+.retrieval-page {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding-bottom: 56px;
+}
+
+.retrieval-page .page-description {
+  max-width: 640px;
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.retrieval-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-top: 28px;
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.retrieval-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.retrieval-field {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  width: 100%;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+}
+
+.retrieval-controls .retrieval-field {
+  width: auto;
+}
+
+.retrieval-field select,
+.retrieval-field input {
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: #e8ece9;
+  font-family: var(--mono);
+  font-size: 12px;
+  outline: none;
+}
+
+.retrieval-controls .retrieval-field input {
+  width: 96px;
+}
+
+.retrieval-field select:focus,
+.retrieval-field input:focus {
+  border-color: var(--accent);
+}
+
+.retrieval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+}
+
+.retrieval-actions .primary-button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.retrieval-error {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  padding: 11px 14px;
+  border: 1px solid #6d3535;
+  border-radius: 8px;
+  background: #2a1a1a;
+  color: #f0a3a3;
+  font-size: 12px;
+}
+
+.retrieval-results {
+  margin-top: 34px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.retrieval-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.retrieval-metric {
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.retrieval-metric span {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+}
+
+.retrieval-metric strong {
+  display: block;
+  margin-top: 12px;
+  color: var(--accent);
+  font-family: var(--display);
+  font-size: 26px;
+}
+
+.retrieval-metric strong.is-text {
+  font-size: 16px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.retrieval-answer-card {
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.retrieval-answer-label {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+}
+
+.retrieval-answer {
+  margin-top: 14px;
+  color: #e8ece9;
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.retrieval-answer p {
+  margin: 0 0 12px;
+}
+
+.retrieval-answer p:last-child {
+  margin-bottom: 0;
+}
+
+.retrieval-answer code {
+  font-family: var(--mono);
+  color: var(--accent);
+}
+
+.retrieval-table {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.retrieval-row {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 2.4fr) 70px 80px 90px;
+  gap: 14px;
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  align-items: start;
+}
+
+.retrieval-row:last-child {
+  border-bottom: 0;
+}
+
+.retrieval-row.head {
+  background: var(--surface-raised);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.8px;
+}
+
+.retrieval-source-id {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.retrieval-source-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.retrieval-source-copy strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.retrieval-source-copy span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+@media (max-width: 760px) {
+  .retrieval-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .retrieval-row {
+    grid-template-columns: 30px minmax(0, 1fr) 70px;
+  }
+
+  .retrieval-row span:nth-last-child(1),
+  .retrieval-row span:nth-last-child(2) {
+    display: none;
+  }
+}
