@@ -65,7 +65,7 @@ def test_prompt_builder_creates_generation_request():
     assert result.request.user_prompt
     assert result.request.system_prompt
     assert result.request.temperature == 0.2
-    assert result.request.max_output_tokens == 512
+    assert result.request.max_output_tokens == 768
 
 
 def test_prompt_contains_query_and_evidence():
@@ -91,7 +91,25 @@ def test_prompt_contains_citation_instructions():
     )
 
     assert "[Source 1]" in result.request.user_prompt
-    assert "Never invent citations" in result.request.user_prompt
+    assert "Never invent facts" in result.request.user_prompt
+
+
+def test_prompt_requires_direct_scoped_answers():
+    context, _, _, _ = create_context()
+
+    result = PromptBuilder().build(
+        query="Explain hybrid retrieval.",
+        context=context,
+    )
+
+    prompt = result.request.user_prompt
+
+    assert "Answer the question in the first sentence" in prompt
+    assert "Do not restate the question" in prompt
+    assert "Answer in at most three sentences" in prompt
+    assert "Include only what the question asks for" in prompt
+    assert "Do not add projects, roles, achievements" in prompt
+    assert "End every sentence with its source label" in prompt
 
 
 def test_prompt_preserves_source_mapping():

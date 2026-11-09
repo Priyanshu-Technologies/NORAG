@@ -1,4 +1,5 @@
 import math
+from threading import RLock
 from typing import Any
 from uuid import UUID
 
@@ -17,10 +18,12 @@ class InMemoryVectorIndex(VectorIndex):
 
         self._dimensions = dimensions
         self._chunks: dict[UUID, EmbeddedChunk] = {}
+        self._lock = RLock()
 
     @property
     def count(self) -> int:
-        return len(self._chunks)
+        with self._lock:
+            return len(self._chunks)
 
     def add(self, chunk: EmbeddedChunk) -> None:
         self.add_many([chunk])
@@ -31,33 +34,34 @@ class InMemoryVectorIndex(VectorIndex):
         if not chunks:
             return
 
-        batch_ids = [chunk.chunk_id for chunk in chunks]
+        with self._lock:
+            batch_ids = [chunk.chunk_id for chunk in chunks]
 
-        if len(batch_ids) != len(set(batch_ids)):
-            raise ValueError("Duplicate chunk IDs in batch")
+            if len(batch_ids) != len(set(batch_ids)):
+                raise ValueError("Duplicate chunk IDs in batch")
 
-        existing_ids = set(self._chunks)
+            existing_ids = set(self._chunks)
 
-        if any(chunk_id in existing_ids for chunk_id in batch_ids):
-            raise ValueError("Chunk already exists in index")
+            if any(chunk_id in existing_ids for chunk_id in batch_ids):
+                raise ValueError("Chunk already exists in index")
 
-        expected_dimensions = self._dimensions
+            expected_dimensions = self._dimensions
 
-        for chunk in chunks:
-            if expected_dimensions is None:
-                expected_dimensions = chunk.dimensions
+            for chunk in chunks:
+                if expected_dimensions is None:
+                    expected_dimensions = chunk.dimensions
 
-            if chunk.dimensions != expected_dimensions:
-                raise ValueError("Vector dimension mismatch")
+                if chunk.dimensions != expected_dimensions:
+                    raise ValueError("Vector dimension mismatch")
 
-            self._validate_vector(chunk.vector)
+                self._validate_vector(chunk.vector)
 
-        # Only mutate the index after all validation succeeds.
-        if self._dimensions is None:
-            self._dimensions = expected_dimensions
+            # Only mutate the index after all validation succeeds.
+            if self._dimensions is None:
+                self._dimensions = expected_dimensions
 
-        for chunk in chunks:
-            self._chunks[chunk.chunk_id] = chunk
+            for chunk in chunks:
+                self._chunks[chunk.chunk_id] = chunk
 
     def search(
         self,
@@ -73,14 +77,18 @@ class InMemoryVectorIndex(VectorIndex):
 
         self._validate_vector(query_vector)
 
-        if self._dimensions is not None and len(query_vector) != self._dimensions:
+        with self._lock:
+            dimensions = self._dimensions
+            snapshot = list(self._chunks.values())
+
+        if dimensions is not None and len(query_vector) != dimensions:
             raise ValueError("Query vector dimension mismatch")
 
         filters = metadata_filters or {}
 
         results: list[VectorSearchResult] = []
 
-        for chunk in self._chunks.values():
+        for chunk in snapshot:
             if document_id is not None and chunk.document_id != document_id:
                 continue
 
@@ -111,17 +119,19 @@ class InMemoryVectorIndex(VectorIndex):
     def remove(self, chunk_id: UUID) -> bool:
         """Remove a chunk by ID."""
 
-        if chunk_id not in self._chunks:
-            return False
+        with self._lock:
+            if chunk_id not in self._chunks:
+                return False
 
-        del self._chunks[chunk_id]
-        return True
+            del self._chunks[chunk_id]
+            return True
 
     def clear(self) -> None:
         """Remove all indexed chunks."""
 
-        self._chunks.clear()
-        self._dimensions = None
+        with self._lock:
+            self._chunks.clear()
+            self._dimensions = None
 
     @staticmethod
     def _validate_vector(vector: list[float]) -> None:

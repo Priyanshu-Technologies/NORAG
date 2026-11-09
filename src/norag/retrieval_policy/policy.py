@@ -35,11 +35,21 @@ class AdaptiveRetrievalPolicy:
         self,
         analysis: QueryAnalysis,
         top_k: int = 5,
+        dense_weight: float | None = None,
+        sparse_weight: float | None = None,
     ) -> RetrievalPlan:
         if top_k < 1:
             raise ValueError("top_k must be positive")
 
-        multiplier, dense_weight, sparse_weight = self.DEFAULT_SETTINGS[analysis.intent]
+        if (dense_weight is None) != (sparse_weight is None):
+            raise ValueError("dense_weight and sparse_weight must be provided together")
+
+        multiplier, default_dense, default_sparse = self.DEFAULT_SETTINGS[
+            analysis.intent
+        ]
+
+        effective_dense = default_dense if dense_weight is None else dense_weight
+        effective_sparse = default_sparse if sparse_weight is None else sparse_weight
 
         if top_k > self.max_candidates:
             raise ValueError("top_k cannot exceed max_candidates")
@@ -52,8 +62,8 @@ class AdaptiveRetrievalPolicy:
             intent=analysis.intent,
             final_top_k=top_k,
             candidate_k=candidate_k,
-            dense_weight=dense_weight,
-            sparse_weight=sparse_weight,
+            dense_weight=effective_dense,
+            sparse_weight=effective_sparse,
         )
 
         return plan.validate_weights()

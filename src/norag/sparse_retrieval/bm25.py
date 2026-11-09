@@ -1,5 +1,6 @@
 import math
 from collections import Counter
+from threading import RLock
 from typing import Any
 from uuid import UUID
 
@@ -30,10 +31,12 @@ class BM25Index(SparseIndex):
         self._term_frequencies: dict[UUID, Counter[str]] = {}
         self._document_lengths: dict[UUID, int] = {}
         self._document_frequency: Counter[str] = Counter()
+        self._lock = RLock()
 
     @property
     def count(self) -> int:
-        return len(self._chunks)
+        with self._lock:
+            return len(self._chunks)
 
     def add(self, chunk: Chunk) -> None:
         self.add_many([chunk])
@@ -44,31 +47,32 @@ class BM25Index(SparseIndex):
         if not chunks:
             return
 
-        batch_ids = [chunk.id for chunk in chunks]
+        with self._lock:
+            batch_ids = [chunk.id for chunk in chunks]
 
-        if len(batch_ids) != len(set(batch_ids)):
-            raise ValueError("Duplicate chunk IDs in batch")
+            if len(batch_ids) != len(set(batch_ids)):
+                raise ValueError("Duplicate chunk IDs in batch")
 
-        if any(chunk_id in self._chunks for chunk_id in batch_ids):
-            raise ValueError("Chunk already exists in index")
+            if any(chunk_id in self._chunks for chunk_id in batch_ids):
+                raise ValueError("Chunk already exists in index")
 
-        prepared = []
+            prepared = []
 
-        for chunk in chunks:
-            terms = tokenize(chunk.text)
-            frequencies = Counter(terms)
-            prepared.append((chunk, frequencies, len(terms)))
+            for chunk in chunks:
+                terms = tokenize(chunk.text)
+                frequencies = Counter(terms)
+                prepared.append((chunk, frequencies, len(terms)))
 
-        # All validation is complete. Now update the index.
-        for chunk, frequencies, length in prepared:
-            chunk_id = chunk.id
+            # All validation is complete. Now update the index.
+            for chunk, frequencies, length in prepared:
+                chunk_id = chunk.id
 
-            self._chunks[chunk_id] = chunk
-            self._term_frequencies[chunk_id] = frequencies
-            self._document_lengths[chunk_id] = length
+                self._chunks[chunk_id] = chunk
+                self._term_frequencies[chunk_id] = frequencies
+                self._document_lengths[chunk_id] = length
 
-            for term in frequencies:
-                self._document_frequency[term] += 1
+                for term in frequencies:
+                    self._document_frequency[term] += 1
 
     def search(
         self,
@@ -87,19 +91,29 @@ class BM25Index(SparseIndex):
         if not query_terms:
             raise ValueError("Query contains no searchable terms")
 
-        total_documents = self.count
+        with self._lock:
+            total_documents = len(self._chunks)
 
-        if total_documents == 0:
-            return []
+            if total_documents == 0:
+                return []
 
-        average_length = sum(self._document_lengths.values()) / total_documents
+            average_length = sum(self._document_lengths.values()) / total_documents
+            average_length = max(average_length, 1.0)
 
-        average_length = max(average_length, 1.0)
+            snapshot = [
+                (
+                    chunk,
+                    self._term_frequencies[chunk_id],
+                    self._document_lengths[chunk_id],
+                )
+                for chunk_id, chunk in self._chunks.items()
+            ]
+            document_frequency = dict(self._document_frequency)
 
         filters = metadata_filters or {}
         results: list[SparseSearchResult] = []
 
-        for chunk_id, chunk in self._chunks.items():
+        for chunk, frequencies, document_length in snapshot:
             if document_id is not None and chunk.document_id != document_id:
                 continue
 
@@ -108,15 +122,13 @@ class BM25Index(SparseIndex):
             ):
                 continue
 
-            frequencies = self._term_frequencies[chunk_id]
-            document_length = self._document_lengths[chunk_id]
-
             score = self._calculate_score(
                 query_terms=query_terms,
                 frequencies=frequencies,
                 document_length=document_length,
                 average_length=average_length,
                 total_documents=total_documents,
+                document_frequency=document_frequency,
             )
 
             # Avoid returning unrelated chunks with zero scores.
@@ -142,6 +154,7 @@ class BM25Index(SparseIndex):
         document_length: int,
         average_length: float,
         total_documents: int,
+        document_frequency: dict[str, int],
     ) -> float:
         """Calculate the BM25 score for one document."""
 
@@ -153,11 +166,10 @@ class BM25Index(SparseIndex):
             if term_frequency == 0:
                 continue
 
-            document_frequency = self._document_frequency[term]
+            frequency = document_frequency.get(term, 0)
 
             inverse_document_frequency = math.log1p(
-                (total_documents - document_frequency + 0.5)
-                / (document_frequency + 0.5)
+                (total_documents - frequency + 0.5) / (frequency + 0.5)
             )
 
             length_normalization = (
@@ -175,26 +187,28 @@ class BM25Index(SparseIndex):
     def remove(self, chunk_id: UUID) -> bool:
         """Remove a chunk and update corpus statistics."""
 
-        if chunk_id not in self._chunks:
-            return False
+        with self._lock:
+            if chunk_id not in self._chunks:
+                return False
 
-        frequencies = self._term_frequencies.pop(chunk_id)
+            frequencies = self._term_frequencies.pop(chunk_id)
 
-        for term in frequencies:
-            self._document_frequency[term] -= 1
+            for term in frequencies:
+                self._document_frequency[term] -= 1
 
-            if self._document_frequency[term] == 0:
-                del self._document_frequency[term]
+                if self._document_frequency[term] == 0:
+                    del self._document_frequency[term]
 
-        del self._document_lengths[chunk_id]
-        del self._chunks[chunk_id]
+            del self._document_lengths[chunk_id]
+            del self._chunks[chunk_id]
 
-        return True
+            return True
 
     def clear(self) -> None:
         """Remove all chunks and corpus statistics."""
 
-        self._chunks.clear()
-        self._term_frequencies.clear()
-        self._document_lengths.clear()
-        self._document_frequency.clear()
+        with self._lock:
+            self._chunks.clear()
+            self._term_frequencies.clear()
+            self._document_lengths.clear()
+            self._document_frequency.clear()

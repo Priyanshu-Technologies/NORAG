@@ -19,6 +19,14 @@ class DocumentIndexResult:
     chunk_count: int
 
 
+@dataclass(frozen=True)
+class DocumentManagerStats:
+    documents: int
+    chunks: int
+    dense_chunks: int
+    sparse_chunks: int
+
+
 class DuplicateDocumentError(ValueError):
     """Raised when a document with identical content already exists."""
 
@@ -116,21 +124,38 @@ class DocumentManager:
         self._documents = {document.id: document for document in documents}
         self._chunk_ids = chunk_ids
 
-    def upload(self, source: Path) -> DocumentIndexResult:
-        """Ingest, index, persist and store the original document."""
+    def upload(
+        self,
+        source: Path,
+        replace_existing: bool = False,
+    ) -> DocumentIndexResult:
+        """Ingest, index, persist and store the original document.
+
+        When ``replace_existing`` is true an already indexed document with
+        identical content is deleted before the new copy is stored.
+        """
 
         with self._lock:
             document = self.ingestion_service.ingest(source)
 
             content_hash = getattr(document, "content_hash", None)
 
-            if content_hash and any(
-                existing.content_hash == content_hash
-                for existing in self._documents.values()
-            ):
-                raise DuplicateDocumentError(
-                    "A document with identical content has already been uploaded."
-                )
+            duplicate = next(
+                (
+                    existing
+                    for existing in self._documents.values()
+                    if content_hash and existing.content_hash == content_hash
+                ),
+                None,
+            )
+
+            if duplicate is not None:
+                if not replace_existing:
+                    raise DuplicateDocumentError(
+                        "A document with identical content has already been uploaded."
+                    )
+
+                self._delete_locked(duplicate.id)
 
             if self.file_storage is not None:
                 document.metadata.file_name = source.name
@@ -204,31 +229,44 @@ class DocumentManager:
         with self._lock:
             return self._documents.get(document_id)
 
+    def stats(self) -> DocumentManagerStats:
+        """Return a consistent snapshot of indexed document statistics."""
+
+        with self._lock:
+            return DocumentManagerStats(
+                documents=len(self._documents),
+                chunks=sum(len(ids) for ids in self._chunk_ids.values()),
+                dense_chunks=self.dense_index.count,
+                sparse_chunks=self.sparse_index.count,
+            )
+
     def delete(self, document_id: UUID) -> bool:
         """Delete document records, indexes and original file."""
 
         with self._lock:
-            document = self._documents.get(document_id)
+            return self._delete_locked(document_id)
 
-            if document is None:
-                return False
+    def _delete_locked(self, document_id: UUID) -> bool:
+        document = self._documents.get(document_id)
 
-            if self.repository is not None:
-                deleted = self.repository.delete(document_id)
+        if document is None:
+            return False
 
-                if not deleted:
-                    raise RuntimeError("Document exists in memory but not in storage.")
+        if self.repository is not None:
+            deleted = self.repository.delete(document_id)
 
-            chunk_ids = self._chunk_ids[document_id]
+            if not deleted:
+                raise RuntimeError("Document exists in memory but not in storage.")
 
-            for chunk_id in chunk_ids:
-                self.dense_index.remove(chunk_id)
-                self.sparse_index.remove(chunk_id)
+        chunk_ids = self._chunk_ids.pop(document_id)
 
-            del self._documents[document_id]
-            del self._chunk_ids[document_id]
+        for chunk_id in chunk_ids:
+            self.dense_index.remove(chunk_id)
+            self.sparse_index.remove(chunk_id)
 
-            if self.file_storage is not None:
-                self.file_storage.delete(document)
+        del self._documents[document_id]
 
-            return True
+        if self.file_storage is not None:
+            self.file_storage.delete(document)
+
+        return True

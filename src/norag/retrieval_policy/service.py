@@ -46,6 +46,8 @@ class AdaptiveRetrievalService:
         self,
         query: str,
         top_k: int = 5,
+        dense_weight: float | None = None,
+        sparse_weight: float | None = None,
     ) -> AdaptiveRetrievalResponse:
         if not query.strip():
             raise ValueError("Query cannot be empty")
@@ -58,6 +60,8 @@ class AdaptiveRetrievalService:
         plan = self.policy.create_plan(
             analysis=analysis,
             top_k=top_k,
+            dense_weight=dense_weight,
+            sparse_weight=sparse_weight,
         )
 
         candidates = self.retrieve(query, plan)

@@ -22,7 +22,7 @@ class ApproximatePromptTokenCounter:
 
 
 class PromptBuilder:
-    """Construct grounded, citation-aware generation prompts."""
+    """Construct evidence-grounded, citation-aware generation prompts."""
 
     def __init__(
         self,
@@ -75,22 +75,28 @@ class PromptBuilder:
             estimated_input_tokens=estimated_tokens,
         )
 
-    def _build_user_prompt(
-        self,
-        query: str,
-        evidence: str,
-    ) -> str:
+    def _build_user_prompt(self, query: str, evidence: str) -> str:
         return (
             f"Question:\n{query}\n\n"
             f"Retrieved evidence:\n{evidence}\n\n"
-            "Answering requirements:\n"
-            "- Answer using only the retrieved evidence.\n"
-            "- Cite factual claims using the exact source labels "
-            "provided, such as [Source 1].\n"
-            "- Never invent citations or supporting facts.\n"
-            "- If the evidence is insufficient, explicitly explain "
-            "what cannot be established.\n"
-            "- Distinguish facts from reasonable interpretations.\n"
+            "Instructions:\n"
+            "1. Answer the question in the first sentence. Do not restate "
+            "the question and do not add a preamble.\n"
+            "2. Answer in at most three sentences, or at most five short "
+            "bullets if the question asks for a list. No headings, no "
+            "summary, and no conclusion.\n"
+            "3. Include only what the question asks for. Do not add "
+            "projects, roles, achievements, examples, or background "
+            "unless the question asks for them.\n"
+            "4. Use only the retrieved evidence. Never invent facts, "
+            "technologies, project details, metrics, or citations.\n"
+            "5. When names, numbers, dates, or thresholds are part of the "
+            "answer, preserve them exactly and never merge separate values.\n"
+            "6. End every sentence with its source label, such as "
+            "[Source 1].\n"
+            "7. If the evidence is insufficient, state exactly what cannot "
+            "be established instead of guessing or padding.\n"
+            "8. Return only the answer.\n"
         )
 
     def _build_sources(

@@ -179,3 +179,24 @@ def test_upload_accepts_documents_with_different_content(manager):
 
     assert result.document is second_document
     assert len(manager.manager.list_documents()) == 2
+
+
+def test_upload_can_replace_duplicate_content(manager):
+    manager.document.content_hash = "a" * 64
+
+    manager.manager.upload(Path("first.pdf"))
+
+    replacement = SimpleNamespace(id=uuid4(), content_hash="a" * 64)
+    manager.ingestion.ingest.return_value = replacement
+
+    result = manager.manager.upload(
+        Path("replacement.pdf"),
+        replace_existing=True,
+    )
+
+    assert result.document is replacement
+
+    documents = manager.manager.list_documents()
+
+    assert len(documents) == 1
+    assert documents[0] is replacement

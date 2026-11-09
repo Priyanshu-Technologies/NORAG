@@ -1,3 +1,5 @@
+from typing import ClassVar
+
 from norag.answering.models import AnswerRequest, AnswerResponse
 from norag.context.assembler import ContextAssembler
 from norag.generation.service import GenerationService
@@ -36,19 +38,39 @@ class AnsweringService:
             )
         )
 
+    SYSTEM_WEIGHTS: ClassVar[dict[str, tuple[float, float] | None]] = {
+        "dense": (1.0, 0.0),
+        "sparse": (0.0, 1.0),
+        "hybrid": None,
+        "hybrid_rerank": None,
+    }
+
     def answer(
         self,
         query: str,
         top_k: int = 5,
+        system: str | None = None,
     ) -> AnswerResponse:
+        if system is not None and system not in self.SYSTEM_WEIGHTS:
+            raise ValueError(f"Unsupported retrieval system: {system}")
+
         request = AnswerRequest(
             query=query,
             top_k=top_k,
         )
 
+        weights = self.SYSTEM_WEIGHTS[system] if system else None
+
+        override = (
+            {"dense_weight": weights[0], "sparse_weight": weights[1]}
+            if weights is not None
+            else {}
+        )
+
         retrieval = self.retrieval_service.search(
             query=request.query,
             top_k=request.top_k,
+            **override,
         )
 
         context = self.context_assembler.assemble(retrieval.results)

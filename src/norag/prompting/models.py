@@ -6,15 +6,22 @@ from norag.generation.models import GenerationRequest
 
 
 class PromptConfig(BaseModel):
-    """Configuration for prompt construction."""
+    """Configuration controlling grounded answer generation."""
 
     system_prompt: str = (
-        "You are NORAG, a technical research assistant. "
-        "Provide accurate, clear, evidence-grounded answers."
+        "You are NORAG, an evidence-grounded research assistant. "
+        "Answer only what the user asked, in at most three sentences, "
+        "using only the supplied retrieved evidence, and end every "
+        "sentence with its source label, such as [Source 1]. "
+        "Never add projects, achievements, examples, or background that "
+        "the question did not ask for. Never fabricate facts, numbers, "
+        "or citations. If the evidence does not establish something, "
+        "say so explicitly in one sentence."
     )
+
     max_input_tokens: int = Field(default=4096, ge=1)
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
-    max_output_tokens: int = Field(default=512, ge=1)
+    max_output_tokens: int = Field(default=768, ge=1)
 
 
 class PromptSource(BaseModel):

@@ -1,9 +1,11 @@
 from dataclasses import dataclass
 
 from norag.answering.service import AnsweringService
+from norag.chunking.models import ChunkingConfig
 from norag.chunking.strategies.structural import StructuralChunker
 from norag.config import Settings, get_settings
 from norag.context.assembler import ContextAssembler
+from norag.context.models import ContextConfig
 from norag.embeddings.factory import create_embedding_service
 from norag.embeddings.service import EmbeddingService
 from norag.generation.providers.ollama import OllamaProvider
@@ -12,6 +14,7 @@ from norag.hybrid_retrieval.service import HybridRetriever
 from norag.ingestion.factory import create_ingestion_service
 from norag.ingestion.service import IngestionService
 from norag.prompting.builder import PromptBuilder
+from norag.prompting.models import PromptConfig
 from norag.query_understanding.classifier import QueryClassifier
 from norag.reranking.factory import create_reranking_service
 from norag.reranking.service import RerankingService
@@ -58,7 +61,14 @@ def create_application_services(
 
     # Document ingestion and chunking
     ingestion_service = create_ingestion_service()
-    chunker = StructuralChunker()
+
+    chunker = StructuralChunker(
+        ChunkingConfig(
+            target_tokens=settings.chunk_target_tokens,
+            max_tokens=settings.chunk_max_tokens,
+            overlap_tokens=settings.chunk_overlap_tokens,
+        )
+    )
 
     # Embedding and indexing
     embedding_service = create_embedding_service()
@@ -84,13 +94,23 @@ def create_application_services(
     )
 
     # Context assembly and prompt construction
-    context_assembler = ContextAssembler()
-    prompt_builder = PromptBuilder()
+    context_assembler = ContextAssembler(
+        ContextConfig(max_tokens=settings.context_max_tokens)
+    )
+    prompt_builder = PromptBuilder(
+        PromptConfig(
+            max_input_tokens=settings.prompt_max_input_tokens,
+            temperature=settings.generation_temperature,
+            max_output_tokens=settings.prompt_max_output_tokens,
+        )
+    )
 
     # LLM generation
     generation_provider = OllamaProvider(
-        model_name="qwen3:1.7b",
-        think=False,
+        model_name=settings.ollama_model,
+        base_url=settings.ollama_base_url,
+        timeout=settings.ollama_timeout_seconds,
+        think=settings.ollama_think,
     )
 
     generation_service = GenerationService(

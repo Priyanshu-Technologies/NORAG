@@ -91,3 +91,28 @@ def test_policy_rejects_top_k_above_maximum() -> None:
             make_analysis(QueryIntent.SEMANTIC),
             top_k=11,
         )
+
+
+def test_policy_accepts_weight_overrides() -> None:
+    policy = AdaptiveRetrievalPolicy()
+
+    plan = policy.create_plan(
+        make_analysis(QueryIntent.SEMANTIC),
+        top_k=5,
+        dense_weight=0.0,
+        sparse_weight=1.0,
+    )
+
+    assert plan.dense_weight == 0.0
+    assert plan.sparse_weight == 1.0
+
+
+def test_policy_rejects_partial_weight_override() -> None:
+    policy = AdaptiveRetrievalPolicy()
+
+    with pytest.raises(ValueError, match="provided together"):
+        policy.create_plan(
+            make_analysis(QueryIntent.SEMANTIC),
+            top_k=5,
+            dense_weight=1.0,
+        )

@@ -1,32 +1,43 @@
 import tempfile
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Annotated
 from uuid import UUID
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
-from fastapi.encoders import jsonable_encoder
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
-from norag.api.document_manager import DocumentManager
-from norag.api.schemas import (
-    DeleteDocumentResponse,
-    DocumentSummary,
-    DocumentUploadResponse,
-    QueryRequest,
-    QueryResponse,
-)
-from norag.application import ApplicationServices
-from norag.storage.filesystem import LocalFileStorage
+from starlette.concurrency import run_in_threadpool
+
 from norag.api.document_manager import (
     DocumentManager,
     DuplicateDocumentError,
 )
+from norag.api.metrics import ServiceMetrics
+from norag.api.schemas import (
+    DeleteDocumentResponse,
+    DocumentStats,
+    DocumentSummary,
+    DocumentUploadResponse,
+    EvaluationRequest,
+    EvaluationResponse,
+    QueryRequest,
+    QueryResponse,
+)
+from norag.api.security import require_api_key
+from norag.application import ApplicationServices
+from norag.evaluation.evaluator import RetrievalEvaluator
+from norag.evaluation.models import EvaluationCase
+from norag.storage.filesystem import LocalFileStorage
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_api_key)])
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 UPLOAD_READ_SIZE = 1024 * 1024
 
 SUPPORTED_EXTENSIONS = {".txt", ".md", ".html", ".pdf"}
 TEXT_EXTENSIONS = {".txt", ".md", ".html"}
+
+SearchFunction = Callable[[str, int], Sequence[UUID]]
 
 
 def get_document_manager(request: Request) -> DocumentManager:
@@ -63,6 +74,18 @@ def get_file_storage(request: Request) -> LocalFileStorage:
         )
 
     return storage
+
+
+def get_metrics(request: Request) -> ServiceMetrics:
+    metrics = getattr(request.app.state, "metrics", None)
+
+    if metrics is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Service metrics are not initialized.",
+        )
+
+    return metrics
 
 
 def validate_filename(filename: str) -> str:
@@ -110,6 +133,54 @@ def validate_file_content(path: Path, suffix: str) -> None:
             ) from exc
 
 
+def _build_search_function(
+    system: str,
+    services: ApplicationServices,
+) -> SearchFunction:
+    """Map an evaluation system name to a concrete retrieval callable."""
+
+    if system == "sparse":
+
+        def search(query: str, k: int) -> Sequence[UUID]:
+            results = services.sparse_index.search(query, top_k=k)
+            return [result.chunk.id for result in results]
+
+        return search
+
+    if system == "hybrid":
+
+        def search(query: str, k: int) -> Sequence[UUID]:
+            results = services.hybrid_retriever.search(query, top_k=k)
+            return [result.chunk.id for result in results]
+
+        return search
+
+    if system == "hybrid_rerank":
+
+        def search(query: str, k: int) -> Sequence[UUID]:
+            candidate_k = max(k, services.dense_index.count)
+            candidates = services.hybrid_retriever.search(
+                query=query,
+                top_k=candidate_k,
+                candidate_k=candidate_k,
+            )
+            ranked = services.reranking_service.rerank(
+                query,
+                candidates,
+                top_k=k,
+            )
+            return [item.result.chunk.id for item in ranked]
+
+        return search
+
+    def dense_search(query: str, k: int) -> Sequence[UUID]:
+        vector = services.embedding_service.embed_query(query)
+        results = services.dense_index.search(vector, top_k=k)
+        return [result.chunk.chunk_id for result in results]
+
+    return dense_search
+
+
 @router.post(
     "/documents",
     response_model=DocumentUploadResponse,
@@ -118,6 +189,7 @@ def validate_file_content(path: Path, suffix: str) -> None:
 async def upload_document(
     request: Request,
     file: Annotated[UploadFile, File()],
+    replace: Annotated[bool, Query()] = False,
 ):
     try:
         manager = get_document_manager(request)
@@ -155,8 +227,12 @@ async def upload_document(
 
             validate_file_content(destination, suffix)
 
-            result = manager.upload(destination)
+            result = await run_in_threadpool(
+                lambda: manager.upload(destination, replace_existing=replace)
+            )
             document = result.document
+
+            get_metrics(request).record_upload()
 
             return DocumentUploadResponse(
                 document_id=document.id,
@@ -176,8 +252,15 @@ async def upload_document(
 
 
 @router.get("/documents", response_model=list[DocumentSummary])
-async def list_documents(request: Request):
+async def list_documents(
+    request: Request,
+    limit: Annotated[int | None, Query(ge=1, le=1000)] = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
+):
     manager = get_document_manager(request)
+
+    documents = manager.list_documents()
+    window = documents[offset:] if limit is None else documents[offset : offset + limit]
 
     return [
         DocumentSummary(
@@ -187,7 +270,7 @@ async def list_documents(request: Request):
             content_hash=document.content_hash,
             created_at=document.created_at,
         )
-        for document in manager.list_documents()
+        for document in window
     ]
 
 
@@ -225,13 +308,15 @@ async def download_document(request: Request, document_id: UUID):
 async def delete_document(request: Request, document_id: UUID):
     manager = get_document_manager(request)
 
-    deleted = manager.delete(document_id)
+    deleted = await run_in_threadpool(manager.delete, document_id)
 
     if not deleted:
         raise HTTPException(
             status_code=404,
             detail="Document not found.",
         )
+
+    get_metrics(request).record_deletion()
 
     return DeleteDocumentResponse(
         document_id=document_id,
@@ -242,19 +327,79 @@ async def delete_document(request: Request, document_id: UUID):
 @router.post("/query", response_model=QueryResponse)
 async def query_documents(request: Request, payload: QueryRequest):
     services = get_application_services(request)
+    metrics = get_metrics(request)
+
+    overrides = {"system": payload.system} if payload.system else {}
 
     try:
-        answer = services.answering_service.answer(
-            query=payload.query,
-            top_k=payload.top_k,
+        answer = await run_in_threadpool(
+            lambda: services.answering_service.answer(
+                query=payload.query,
+                top_k=payload.top_k,
+                **overrides,
+            )
         )
 
-        return QueryResponse(result=jsonable_encoder(answer))
-
     except ValueError as exc:
+        metrics.record_error()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
+    except (RuntimeError, TypeError) as exc:
+        metrics.record_error()
         raise HTTPException(
             status_code=502,
             detail=f"Answer generation failed: {exc}",
         ) from exc
+
+    metrics.record_query()
+
+    return QueryResponse(result=answer)
+
+
+@router.get("/stats", response_model=DocumentStats)
+async def get_stats(request: Request):
+    manager = get_document_manager(request)
+
+    snapshot = manager.stats()
+    counters = get_metrics(request).snapshot()
+    settings = request.app.state.settings
+
+    return DocumentStats(
+        documents=snapshot.documents,
+        chunks=snapshot.chunks,
+        dense_chunks=snapshot.dense_chunks,
+        sparse_chunks=snapshot.sparse_chunks,
+        queries=counters.queries,
+        uploads=counters.uploads,
+        deletions=counters.deletions,
+        errors=counters.errors,
+        environment=settings.environment,
+        ollama_model=settings.ollama_model,
+    )
+
+
+@router.post("/evaluate", response_model=EvaluationResponse)
+async def evaluate_retrieval(request: Request, payload: EvaluationRequest):
+    services = get_application_services(request)
+
+    cases = [
+        EvaluationCase(
+            query=case.query,
+            relevant_chunk_ids=set(case.relevant_chunk_ids),
+        )
+        for case in payload.cases
+    ]
+
+    search_function = _build_search_function(payload.system, services)
+
+    def run() -> EvaluationResponse:
+        report = RetrievalEvaluator().evaluate(
+            cases=cases,
+            search_fn=search_function,
+            k=payload.k,
+        )
+        return EvaluationResponse(report=report)
+
+    try:
+        return await run_in_threadpool(run)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

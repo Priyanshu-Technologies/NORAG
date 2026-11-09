@@ -12,6 +12,8 @@ from norag.storage.interfaces import DocumentRepository
 class SQLiteDocumentRepository(DocumentRepository):
     """SQLite-backed persistent document repository."""
 
+    SCHEMA_VERSION = 1
+
     def __init__(self, database_path: Path | str) -> None:
         self.database_path = Path(database_path)
 
@@ -25,7 +27,7 @@ class SQLiteDocumentRepository(DocumentRepository):
         return connection
 
     def initialize(self) -> None:
-        """Initialize the database schema."""
+        """Initialize the database schema and verify its version."""
 
         self.database_path.parent.mkdir(
             parents=True,
@@ -33,6 +35,15 @@ class SQLiteDocumentRepository(DocumentRepository):
         )
 
         with closing(self._connect()) as connection, connection:
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+
+            if version > self.SCHEMA_VERSION:
+                raise RuntimeError(
+                    "Database schema version "
+                    f"{version} is newer than the supported version "
+                    f"{self.SCHEMA_VERSION}."
+                )
+
             connection.execute("PRAGMA journal_mode = WAL")
 
             connection.execute(
@@ -66,6 +77,8 @@ class SQLiteDocumentRepository(DocumentRepository):
                     ON chunks(document_id)
                     """
             )
+
+            connection.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
 
     def save(
         self,
